@@ -29,7 +29,21 @@ namespace Praeclarum.Bind
     // TODO: "PBind" ?!
     public static class Bind
     {
-
+        /// <summary>
+        /// Usage is:
+        ///     Bind.NotifyPropertyChanged( () => model.Property));
+        /// where model is an object that implements INotifyPropertyChanged.
+        /// My idea is that the Bind class could function as a main point to trigger all property changed propagation stuff.
+        /// If it is used in a WPF application this will simply trigger the "normal" mvvm mechanisms.
+        /// If bindings where created with Bind.Create and the binding has hooked into the PropertyChanged 
+        /// event handler (when one target side is INotifyPropertyChanged) then this method will
+        /// trigger the internal propagation. 
+        /// </summary>
+        /// <typeparam name="T">Type of the target object. Must be INotifyPropertyChanged.</typeparam>
+        /// <param name="propertyExpr">Expression of the form () => model.Property.</param>
+        /// <param name="pred">Currently unused.</param>
+        /// <returns>True if PropertyChanged was successfully triggered on the target object of type T,
+        /// false otherwise.</returns>
         public static bool NotifyPropertyChanged<T>(Expression<Func<T>> propertyExpr, Func<bool> pred = null)
             where T : INotifyPropertyChanged
         {
