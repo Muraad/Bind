@@ -29,6 +29,49 @@ namespace Praeclarum.Bind
     // TODO: "PBind" ?!
     public static class Bind
     {
+
+        public static bool NotifyPropertyChanged<T>(Expression<Func<T>> propertyExpr, Func<bool> pred = null)
+            where T : INotifyPropertyChanged
+        {
+            bool result = false;
+            T target = default(T);
+
+            var memberExpr = propertyExpr.Body as MemberExpression;
+
+            if (memberExpr == null)
+                throw new ArgumentException("Given expression is not a MemberExpression", "outExpr");
+
+            // propertyExpr is () => target.Property
+            // we need the target here.
+            target = (T)Evaluator.EvalExpression(memberExpr);
+
+            if (target == null)
+                throw new ArgumentException("Target to call PropertyChanged is null", "target");
+
+            var property = memberExpr.Member as PropertyInfo;
+            if (property == null)
+                throw new ArgumentException("Given expression member is not a PropertyInfo", "outExpr");
+
+            var propChangedArgs = new PropertyChangedEventArgs(property.Name);
+
+            // Event info is always not null because the constraint on T is INotifyPropertyChanged
+            var eventInfo = target.GetType().GetRuntimeEvent("PropertyChanged");
+
+            // TODO: God or bad to use try? Better let the exception fall through?
+            try
+            {
+                // like target.PropertyChanged(target, propChangedArgs)
+                eventInfo.RaiseMethod.Invoke(target, new object[] { target, propChangedArgs });
+            }
+            catch
+            {
+                result = false;
+            }
+            return result;
+        }
+
+        // UNUSED:
+        /*
         public static bool NotifyPropertyChanged<T>(this T target, Expression<Func<T>> propertyExpr, Func<bool> pred = null)
             where T : INotifyPropertyChanged
         {
@@ -38,6 +81,7 @@ namespace Praeclarum.Bind
                 throw new ArgumentException("Target to call PropertyChanged is null", "target");
 
             var expr = propertyExpr.Body as MemberExpression;
+
             if (expr == null)
                 throw new ArgumentException("Given expression is not a MemberExpression", "outExpr");
 
@@ -60,7 +104,8 @@ namespace Praeclarum.Bind
                 result = false;
             }
             return result;
-        }
+        }*/
+
 
         #region Static Create, BindExpression and SetValue
 
