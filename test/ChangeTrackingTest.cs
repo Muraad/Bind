@@ -10,7 +10,7 @@ namespace Praeclarum.Bind.Test
 		[SetUp]
 		public void SetUp ()
 		{
-			Binding.Error += message => Console.WriteLine (message);
+            Bind.Error += message => Console.WriteLine(message);
 		}
 
 		class PropertyChangedEventObject
@@ -53,7 +53,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			Binding.Create (() => left == obj.StringValue);
+            Bind.Create(() => left == obj.StringValue);
 
 			Assert.AreEqual (1, obj.StringValueChangedCount);
 
@@ -75,7 +75,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			Binding.Create (() => left == objA.StringValue + ", " + objB.StringValue);
+            Bind.Create(() => left == objA.StringValue + ", " + objB.StringValue);
 
 			Assert.AreEqual ("Hello, World", left);
 
@@ -98,8 +98,8 @@ namespace Praeclarum.Bind.Test
 			var leftA = "";
 			var leftB = "";
 
-			Binding.Create (() => leftA == obj.StringValue);
-			Binding.Create (() => leftB == obj.StringValue + "...");
+            Bind.Create(() => leftA == obj.StringValue);
+            Bind.Create(() => leftB == obj.StringValue + "...");
 
 			Assert.AreEqual (1, obj.StringValueChangedCount);
 
@@ -121,8 +121,8 @@ namespace Praeclarum.Bind.Test
 			var leftA = "";
 			var leftB = "";
 
-			var bA = Binding.Create (() => leftA == obj.StringValue);
-			var bB = Binding.Create (() => leftB == obj.StringValue + "...");
+            var bA = Bind.Create(() => leftA == obj.StringValue);
+            var bB = Bind.Create(() => leftB == obj.StringValue + "...");
 
 			Assert.AreEqual (1, obj.StringValueChangedCount);
 
@@ -162,7 +162,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			var b = Binding.Create (() => left == obj.StringValue);
+            var b = Bind.Create(() => left == obj.StringValue);
 
 			Assert.AreEqual (1, obj.StringValueChangedCount);
 
@@ -235,7 +235,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			Binding.Create (() => left == obj.StringValue);
+            Bind.Create(() => left == obj.StringValue);
 
 			Assert.AreEqual (1, obj.PropertyChangedCount);
 
@@ -254,7 +254,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			var b = Binding.Create (() => left == obj.StringValue);
+            var b = Bind.Create(() => left == obj.StringValue);
 
 			Assert.AreEqual (1, obj.PropertyChangedCount);
 
@@ -314,7 +314,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var left = "";
 
-			var b = Binding.Create (() => left == obj.StringValue);
+            var b = Bind.Create(() => left == obj.StringValue);
 
 			Assert.AreEqual (1, obj.StringValueChangedCount);
 

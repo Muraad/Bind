@@ -9,7 +9,7 @@ namespace Praeclarum.Bind.Test
 		[SetUp]
 		public void SetUp ()
 		{
-			Binding.Error += message => Console.WriteLine (message);
+            Bind.Error += message => Console.WriteLine(message);
 		}
 
 		[Test]
@@ -18,7 +18,7 @@ namespace Praeclarum.Bind.Test
 			var left = "";
 			var right = "hello";
 
-			Binding.Create (() => left == right);
+			Bind.Create (() => left == right);
 
 			Assert.AreEqual (left, right);
 			Assert.AreEqual (left, "hello");
@@ -30,7 +30,7 @@ namespace Praeclarum.Bind.Test
 			var left = "hello";
 			var right = "";
 
-			Binding.Create (() => left == right);
+            Bind.Create(() => left == right);
 
 			Assert.AreEqual (left, right);
 			Assert.AreEqual (left, "");
@@ -47,7 +47,7 @@ namespace Praeclarum.Bind.Test
 			TestObject left = null;
 			TestObject right = new TestObject ();
 
-			Binding.Create (() => left == right);
+            Bind.Create(() => left == right);
 
 			Assert.AreSame (left, right);
 			Assert.IsNotNull (left);
@@ -59,7 +59,7 @@ namespace Praeclarum.Bind.Test
 			TestObject left = new TestObject ();
 			TestObject right = null;
 
-			Binding.Create (() => left == right);
+            Bind.Create(() => left == right);
 
 			Assert.AreSame (left, right);
 			Assert.IsNull (left);
@@ -73,7 +73,7 @@ namespace Praeclarum.Bind.Test
 				State = 42,
 			};
 
-			Binding.Create (() => left == right.State);
+            Bind.Create(() => left == right.State);
 
 			Assert.AreEqual (left, right.State);
 			Assert.AreEqual (left, 42);
@@ -87,7 +87,7 @@ namespace Praeclarum.Bind.Test
 			};
 			var right = 1001;
 
-			Binding.Create (() => left.State == right);
+            Bind.Create(() => left.State == right);
 
 			Assert.AreEqual (left.State, right);
 			Assert.AreEqual (left.State, 1001);
@@ -100,7 +100,7 @@ namespace Praeclarum.Bind.Test
 		{
 			var left = 0;
 
-			Binding.Create (() => left == Method ());
+            Bind.Create(() => left == Method());
 
 			Assert.AreEqual (left, 33);
 		}
@@ -110,7 +110,7 @@ namespace Praeclarum.Bind.Test
 		{
 			var right = 42;
 
-			Binding.Create (() => Method () == right);
+			Bind.Create (() => Method () == right);
 
 			Assert.AreEqual (right, 33);
 		}

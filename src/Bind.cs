@@ -23,7 +23,218 @@ using System.ComponentModel;
 
 namespace Praeclarum.Bind
 {
-	/// <summary>
+    #region Bind static class, main api entry point.
+
+    // TODO: Maybe rename it to an other name? Is "Bind" too common? 
+    // TODO: "PBind" ?!
+    public static class Bind
+    {
+        public static bool NotifyPropertyChanged<T>(this T target, Expression<Func<T>> propertyExpr, Func<bool> pred = null)
+            where T : INotifyPropertyChanged
+        {
+            bool result = false;
+
+            if (target == null)
+                throw new ArgumentException("Target to call PropertyChanged is null", "target");
+
+            var expr = propertyExpr.Body as MemberExpression;
+            if (expr == null)
+                throw new ArgumentException("Given expression is not a MemberExpression", "outExpr");
+
+            var property = expr.Member as PropertyInfo;
+            if (property == null)
+                throw new ArgumentException("Given expression member is not a PropertyInfo", "outExpr");
+
+            var propChangedArgs = new PropertyChangedEventArgs(property.Name);
+
+            // Event info is always not null because the constraint on T is INotifyPropertyChanged
+            var eventInfo = target.GetType().GetRuntimeEvent("PropertyChanged");
+
+            try
+            {
+                // like target.PropertyChanged(target, propChangedArgs)
+                eventInfo.RaiseMethod.Invoke(target, new object[] { target, propChangedArgs });
+            }
+            catch
+            {
+                result = false;
+            }
+            return result;
+        }
+
+        #region Static Create, BindExpression and SetValue
+
+        /// <summary>
+        /// Uses the lambda expression to create data bindings.
+        /// Equality expression (==) become data bindings.
+        /// And expressions (&&) can be used to group the data bindings.
+        /// </summary>
+        /// <param name="specifications">The binding specifications.</param>
+        public static Binding Create<T>(Expression<Func<T>> specifications)
+        {
+            return BindExpression(specifications.Body);
+        }
+
+        static Binding BindExpression(Expression expr)
+        {
+            //
+            // Is this a group of bindings
+            //
+            if (expr.NodeType == ExpressionType.AndAlso)
+            {
+
+                var b = (BinaryExpression)expr;
+
+                var parts = new List<Expression>();
+
+                while (b != null)
+                {
+                    var l = b.Left;
+                    parts.Add(b.Right);
+                    if (l.NodeType == ExpressionType.AndAlso)
+                    {
+                        b = (BinaryExpression)l;
+                    }
+                    else
+                    {
+                        parts.Add(l);
+                        b = null;
+                    }
+                }
+
+                parts.Reverse();
+
+                return new MultipleBindings(parts.Select(BindExpression));
+            }
+
+            //
+            // Are we binding two values?
+            //
+            if (expr.NodeType == ExpressionType.Equal)
+            {
+                var b = (BinaryExpression)expr;
+                return new EqualityBinding(b.Left, b.Right);
+            }
+
+            //
+            // This must be a new object binding (a template)
+            //
+            throw new NotSupportedException("Only equality bindings are supported.");
+        }
+
+        internal static bool SetValue(Expression expr, object value, int changeId)
+        {
+            if (expr.NodeType == ExpressionType.MemberAccess)
+            {
+                var m = (MemberExpression)expr;
+                var mem = m.Member;
+
+                var target = Evaluator.EvalExpression(m.Expression);
+
+                var f = mem as FieldInfo;
+                var p = mem as PropertyInfo;
+
+                if (f != null)
+                {
+                    f.SetValue(target, value);
+                }
+                else if (p != null)
+                {
+                    p.SetValue(target, value, null);
+                }
+                else
+                {
+                    ReportError("Trying to SetValue on " + mem.GetType() + " member");
+                    return false;
+                }
+
+                InvalidateMember(target, mem, changeId);
+                return true;
+            }
+
+            ReportError("Trying to SetValue on " + expr.NodeType + " expression");
+            return false;
+        }
+
+        #endregion
+
+        #region Global error handling
+
+        public static event Action<string> Error = delegate { };
+
+        static void ReportError(string message)
+        {
+            Debug.WriteLine(message);
+            Error(message);
+        }
+
+        static void ReportError(object errorObject)
+        {
+            ReportError(errorObject.ToString());
+        }
+
+        #endregion
+
+        #region objectSubs field, internal static AddMemberChangeAction/RemoveMemberChangeAction/InvalidateMember
+
+        static readonly Dictionary<Tuple<Object, MemberInfo>, MemberActions> objectSubs = 
+            new Dictionary<Tuple<Object, MemberInfo>, MemberActions>();
+
+        internal static MemberChangeAction AddMemberChangeAction(object target, MemberInfo member, Action<int> k)
+        {
+            var key = Tuple.Create(target, member);
+            MemberActions subs;
+            if (!objectSubs.TryGetValue(key, out subs))
+            {
+                subs = new MemberActions(target, member);
+                objectSubs.Add(key, subs);
+            }
+
+            //			Debug.WriteLine ("ADD CHANGE ACTION " + target + " " + member);
+            var sub = new MemberChangeAction(target, member, k);
+            subs.AddAction(sub);
+            return sub;
+        }
+
+        internal static void RemoveMemberChangeAction(MemberChangeAction sub)
+        {
+            var key = Tuple.Create(sub.Target, sub.Member);
+            MemberActions subs;
+            if (objectSubs.TryGetValue(key, out subs))
+            {
+                //				Debug.WriteLine ("REMOVE CHANGE ACTION " + sub.Target + " " + sub.Member);
+                subs.RemoveAction(sub);
+            }
+        }
+
+        /// <summary>
+        /// Invalidate the specified object member. This will cause all actions
+        /// associated with that member to be executed.
+        /// This is the main mechanism by which binding values are distributed.
+        /// </summary>
+        /// <param name="target">Target object</param>
+        /// <param name="member">Member of the object that changed</param>
+        /// <param name="changeId">Change identifier</param>
+        public static void InvalidateMember(object target, MemberInfo member, int changeId = 0)
+        {
+            var key = Tuple.Create(target, member);
+            MemberActions subs;
+            if (objectSubs.TryGetValue(key, out subs))
+            {
+                //				Debug.WriteLine ("INVALIDATE {0} {1}", target, member.Name);
+                subs.Notify(changeId);
+            }
+        }
+
+        #endregion
+    }
+
+    #endregion
+
+
+    #region Abstract Binding class
+
+    /// <summary>
 	/// Abstract class that represents bindings between values in an applications.
 	/// Binding are created using Create and removed by calling Unbind.
 	/// </summary>
@@ -35,303 +246,189 @@ namespace Praeclarum.Bind
 		public virtual void Unbind ()
 		{
 		}
+    }
 
-		/// <summary>
-		/// Uses the lambda expression to create data bindings.
-		/// Equality expression (==) become data bindings.
-		/// And expressions (&&) can be used to group the data bindings.
-		/// </summary>
-		/// <param name="specifications">The binding specifications.</param>
-		public static Binding Create<T> (Expression<Func<T>> specifications)
-		{
-			return BindExpression (specifications.Body);
-		}
+    #endregion
 
-		static Binding BindExpression (Expression expr)
-		{
-			//
-			// Is this a group of bindings
-			//
-			if (expr.NodeType == ExpressionType.AndAlso) {
+    #region MemberActions class for internal usage only
 
-				var b = (BinaryExpression)expr;
+    /// <summary>
+    /// This class stores everything needed to bind to an object property.
+    /// Internally it has a list of MemberChangedAction´s.
+    /// </summary>
+    internal class MemberActions
+    {
+        #region Static GetEvent() (EventInfo) for type and event name, and CreateGenericEventHandler() (delegate) from EventInfo and action
+        
+        static EventInfo GetEvent(Type type, string eventName)
+        {
+            var t = type;
+            while (t != null && t != typeof(object))
+            {
+                var ti = t.GetTypeInfo();
+                var ev = t.GetTypeInfo().GetDeclaredEvent(eventName);
+                if (ev != null)
+                    return ev;
+                t = ti.BaseType;
+            }
+            return null;
+        }
 
-				var parts = new List<Expression> ();
+        static Delegate CreateGenericEventHandler(EventInfo evt, Action d)
+        {
+            var handlerType = evt.EventHandlerType;
+            var handlerTypeInfo = handlerType.GetTypeInfo();
+            var handlerInvokeInfo = handlerTypeInfo.GetDeclaredMethod("Invoke");
+            var eventParams = handlerInvokeInfo.GetParameters();
 
-				while (b != null) {
-					var l = b.Left;
-					parts.Add (b.Right);
-					if (l.NodeType == ExpressionType.AndAlso) {
-						b = (BinaryExpression)l;
-					} else {
-						parts.Add (l);
-						b = null;
-					}
-				}
+            //lambda: (object x0, EventArgs x1) => d()
+            var parameters = eventParams.Select(p => Expression.Parameter(p.ParameterType, p.Name)).ToArray();
+            var body = Expression.Call(Expression.Constant(d), d.GetType().GetTypeInfo().GetDeclaredMethod("Invoke"));
+            var lambda = Expression.Lambda(body, parameters);
 
-				parts.Reverse ();
+            return lambda.Compile();
+        }
 
-				return new MultipleBindings (parts.Select (BindExpression));
-			}
+        #endregion
 
-			//
-			// Are we binding two values?
-			//
-			if (expr.NodeType == ExpressionType.Equal) {
-				var b = (BinaryExpression)expr;
-				return new EqualityBinding (b.Left, b.Right);
-			}
+        #region Private variables target, member, eventInfo, eventHandlers and actions list
 
-			//
-			// This must be a new object binding (a template)
-			//
-			throw new NotSupportedException ("Only equality bindings are supported.");
-		}
+        // target and member are also used as a "key" for a Dictionary
+        readonly object target;
+        readonly MemberInfo member;
 
-		protected static bool SetValue (Expression expr, object value, int changeId)
-		{
-			if (expr.NodeType == ExpressionType.MemberAccess) {				
-				var m = (MemberExpression)expr;
-				var mem = m.Member;
+        EventInfo eventInfo;
+        Delegate eventHandler;
+        readonly List<MemberChangeAction> actions = new List<MemberChangeAction>();
 
-				var target = Evaluator.EvalExpression (m.Expression);
+        #endregion
 
-				var f = mem as FieldInfo;
-				var p = mem as PropertyInfo;
+        public MemberActions(object target, MemberInfo mem)
+        {
+            this.target = target;
+            member = mem;
+        }
 
-				if (f != null) {
-					f.SetValue (target, value);
-				} else if (p != null) {
-					p.SetValue (target, value, null);
-				} else {
-					ReportError ("Trying to SetValue on " + mem.GetType () + " member");
-					return false;
-				}
+        void AddChangeNotificationEventHandler()
+        {
+            if (target != null)
+            {
+                var npc = target as INotifyPropertyChanged;
+                if (npc != null && (member is PropertyInfo))
+                {
+                    npc.PropertyChanged += HandleNotifyPropertyChanged;
+                }
+                else
+                {
+                    AddHandlerForFirstExistingEvent(member.Name + "Changed", "EditingDidEnd", "ValueChanged", "Changed");
+                    //						if (!added) {
+                    //							Debug.WriteLine ("Failed to bind to change event for " + target);
+                    //						}
+                }
+            }
+        }
 
-				InvalidateMember (target, mem, changeId);
-				return true;
-			}
+        bool AddHandlerForFirstExistingEvent(params string[] names)
+        {
+            var type = target.GetType();
+            foreach (var name in names)
+            {
+                var ev = GetEvent(type, name);
 
-			ReportError ("Trying to SetValue on " + expr.NodeType + " expression");
-			return false;
-		}
+                if (ev != null)
+                {
+                    eventInfo = ev;
+                    var isClassicHandler = typeof(EventHandler).GetTypeInfo().IsAssignableFrom(ev.EventHandlerType.GetTypeInfo());
 
-		public static event Action<string> Error = delegate {};
+                    eventHandler = isClassicHandler ?
+                        (EventHandler)HandleAnyEvent :
+                        CreateGenericEventHandler(ev, () => HandleAnyEvent(null, EventArgs.Empty));
 
-		static void ReportError (string message)
-		{
-			Debug.WriteLine (message);
-			Error (message);
-		}
+                    ev.AddEventHandler(target, eventHandler);
+                    Debug.WriteLine("BIND: Added handler for {0} on {1}", eventInfo.Name, target);
+                    return true;
+                }
+            }
+            return false;
+        }
 
-		static void ReportError (object errorObject)
-		{
-			ReportError (errorObject.ToString ());
-		}
+        void UnsubscribeFromChangeNotificationEvent()
+        {
+            var npc = target as INotifyPropertyChanged;
+            if (npc != null && (member is PropertyInfo))
+            {
+                npc.PropertyChanged -= HandleNotifyPropertyChanged;
+                return;
+            }
 
-		#region Change Notification
+            if (eventInfo == null)
+                return;
 
-		class MemberActions
-		{
-			readonly object target;
-			readonly MemberInfo member;
+            eventInfo.RemoveEventHandler(target, eventHandler);
 
-			EventInfo eventInfo;
-			Delegate eventHandler;
-			
-			public MemberActions (object target, MemberInfo mem)
-			{
-				this.target = target;
-				member = mem;
-			}
+            Debug.WriteLine("BIND: Removed handler for {0} on {1}", eventInfo.Name, target);
 
-			void AddChangeNotificationEventHandler ()
-			{
-				if (target != null) {
-					var npc = target as INotifyPropertyChanged;
-					if (npc != null && (member is PropertyInfo)) {
-						npc.PropertyChanged += HandleNotifyPropertyChanged;
-					}
-					else {
-						AddHandlerForFirstExistingEvent (member.Name + "Changed", "EditingDidEnd", "ValueChanged", "Changed");
-//						if (!added) {
-//							Debug.WriteLine ("Failed to bind to change event for " + target);
-//						}
-					}
-				}
-			}
+            eventInfo = null;
+            eventHandler = null;
+        }
 
-			bool AddHandlerForFirstExistingEvent (params string[] names)
-			{
-				var type = target.GetType ();
-				foreach (var name in names) {
-					var ev = GetEvent (type, name);
+        void HandleNotifyPropertyChanged(object sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == member.Name)
+                Bind.InvalidateMember(target, member);
+        }
 
-					if (ev != null) {
-						eventInfo = ev;
-						var isClassicHandler = typeof(EventHandler).GetTypeInfo ().IsAssignableFrom (ev.EventHandlerType.GetTypeInfo ());
+        void HandleAnyEvent(object sender, EventArgs e)
+        {
+            Bind.InvalidateMember(target, member);
+        }
 
-						eventHandler = isClassicHandler ? 
-							(EventHandler)HandleAnyEvent : 
-							CreateGenericEventHandler (ev, () => HandleAnyEvent (null, EventArgs.Empty));
+        /// <summary>
+        /// Add the specified action to be executed when Notify() is called.
+        /// </summary>
+        /// <param name="action">Action.</param>
+        public void AddAction(MemberChangeAction action)
+        {
+            if (actions.Count == 0)
+            {
+                AddChangeNotificationEventHandler();
+            }
 
-						ev.AddEventHandler(target, eventHandler);
-						Debug.WriteLine ("BIND: Added handler for {0} on {1}", eventInfo.Name, target);
-						return true;
-					}
-				}
-				return false;
-			}
+            actions.Add(action);
+        }
 
-			static EventInfo GetEvent (Type type, string eventName)
-			{
-				var t = type;
-				while (t != null && t != typeof(object)) {
-					var ti = t.GetTypeInfo ();
-					var ev = t.GetTypeInfo ().GetDeclaredEvent (eventName);
-					if (ev != null)
-						return ev;
-					t = ti.BaseType;
-				}
-				return null;
-			}
+        public void RemoveAction(MemberChangeAction action)
+        {
+            actions.Remove(action);
 
-			static Delegate CreateGenericEventHandler (EventInfo evt, Action d)
-			{
-				var handlerType = evt.EventHandlerType;
-				var handlerTypeInfo = handlerType.GetTypeInfo ();
-				var handlerInvokeInfo = handlerTypeInfo.GetDeclaredMethod ("Invoke");
-				var eventParams = handlerInvokeInfo.GetParameters();
+            if (actions.Count == 0)
+            {
+                UnsubscribeFromChangeNotificationEvent();
+            }
+        }
 
-				//lambda: (object x0, EventArgs x1) => d()
-				var parameters = eventParams.Select(p => Expression.Parameter(p.ParameterType, p.Name)).ToArray ();
-				var body = Expression.Call(Expression.Constant(d), d.GetType().GetTypeInfo ().GetDeclaredMethod ("Invoke"));
-				var lambda = Expression.Lambda(body, parameters);
+        /// <summary>
+        /// Execute all the actions.
+        /// </summary>
+        /// <param name="changeId">Change identifier.</param>
+        public void Notify(int changeId)
+        {
+            foreach (var s in actions)
+            {
+                s.Notify(changeId);
+            }
+        }
+    }
 
-				var delegateInvokeInfo = lambda.Compile ().GetMethodInfo ();
-				return delegateInvokeInfo.CreateDelegate (handlerType, null);
-			}
+    #endregion
 
-			void UnsubscribeFromChangeNotificationEvent ()
-			{
-				var npc = target as INotifyPropertyChanged;
-				if (npc != null && (member is PropertyInfo)) {
-					npc.PropertyChanged -= HandleNotifyPropertyChanged;
-					return;
-				}
+    #region MemberChangeAction class for internal usage only
 
-				if (eventInfo == null)
-					return;
-
-				eventInfo.RemoveEventHandler (target, eventHandler);
-
-				Debug.WriteLine ("BIND: Removed handler for {0} on {1}", eventInfo.Name, target);
-
-				eventInfo = null;
-				eventHandler = null;
-			}
-
-			void HandleNotifyPropertyChanged (object sender, PropertyChangedEventArgs e)
-			{
-				if (e.PropertyName == member.Name)
-					Binding.InvalidateMember (target, member);
-			}
-
-			void HandleAnyEvent (object sender, EventArgs e)
-			{
-				Binding.InvalidateMember (target, member);
-			}
-
-			readonly List<MemberChangeAction> actions = new List<MemberChangeAction> ();
-
-			/// <summary>
-			/// Add the specified action to be executed when Notify() is called.
-			/// </summary>
-			/// <param name="action">Action.</param>
-			public void AddAction (MemberChangeAction action)
-			{
-				if (actions.Count == 0) {
-					AddChangeNotificationEventHandler ();
-				}
-
-				actions.Add (action);
-			}
-
-			public void RemoveAction (MemberChangeAction action)
-			{
-				actions.Remove (action);
-
-				if (actions.Count == 0) {
-					UnsubscribeFromChangeNotificationEvent ();
-				}
-			}
-
-			/// <summary>
-			/// Execute all the actions.
-			/// </summary>
-			/// <param name="changeId">Change identifier.</param>
-			public void Notify (int changeId)
-			{
-				foreach (var s in actions) {
-					s.Notify (changeId);
-				}
-			}
-		}
-
-		static readonly Dictionary<Tuple<Object, MemberInfo>, MemberActions> objectSubs = new Dictionary<Tuple<Object, MemberInfo>, MemberActions> ();
-
-		internal static MemberChangeAction AddMemberChangeAction (object target, MemberInfo member, Action<int> k)
-		{
-			var key = Tuple.Create (target, member);
-			MemberActions subs;
-			if (!objectSubs.TryGetValue (key, out subs)) {
-				subs = new MemberActions (target, member);
-				objectSubs.Add (key, subs);
-			}
-
-//			Debug.WriteLine ("ADD CHANGE ACTION " + target + " " + member);
-			var sub = new MemberChangeAction (target, member, k);
-			subs.AddAction (sub);
-			return sub;
-		}
-
-		internal static void RemoveMemberChangeAction (MemberChangeAction sub)
-		{
-			var key = Tuple.Create (sub.Target, sub.Member);
-			MemberActions subs;
-			if (objectSubs.TryGetValue (key, out subs)) {
-//				Debug.WriteLine ("REMOVE CHANGE ACTION " + sub.Target + " " + sub.Member);
-				subs.RemoveAction (sub);
-			}
-		}
-
-		/// <summary>
-		/// Invalidate the specified object member. This will cause all actions
-		/// associated with that member to be executed.
-		/// This is the main mechanism by which binding values are distributed.
-		/// </summary>
-		/// <param name="target">Target object</param>
-		/// <param name="member">Member of the object that changed</param>
-		/// <param name="changeId">Change identifier</param>
-		public static void InvalidateMember (object target, MemberInfo member, int changeId = 0)
-		{
-			var key = Tuple.Create (target, member);
-			MemberActions subs;
-			if (objectSubs.TryGetValue (key, out subs)) {
-//				Debug.WriteLine ("INVALIDATE {0} {1}", target, member.Name);
-				subs.Notify (changeId);
-			}
-		}
-
-		#endregion
-	}
-
-
-	/// <summary>
+    /// <summary>
 	/// An action tied to a particular member of an object.
 	/// When Notify is called, the action is executed.
 	/// </summary>
-	class MemberChangeAction
+	internal class MemberChangeAction
 	{
 		readonly Action<int> action;
 
@@ -355,8 +452,11 @@ namespace Praeclarum.Bind
 		}
 	}
 
+    #endregion
 
-	/// <summary>
+    #region Static linq expression evaluator class
+
+    /// <summary>
 	/// Methods that can evaluate Linq expressions.
 	/// </summary>
 	static class Evaluator
@@ -383,7 +483,11 @@ namespace Praeclarum.Bind
 		}
 	}
 
-	/// <summary>
+    #endregion
+
+    #region Equality and multiple bindings class
+
+    /// <summary>
 	/// Binding between two values. When one changes, the other
 	/// is set.
 	/// </summary>
@@ -405,12 +509,12 @@ namespace Praeclarum.Bind
 		{
 			// Try evaling the right and assigning left
 			Value = Evaluator.EvalExpression (right);
-			var leftSet = SetValue (left, Value, nextChangeId);
+			var leftSet = Bind.SetValue (left, Value, nextChangeId);
 
 			// If that didn't work, then try the other direction
 			if (!leftSet) {
 				Value = Evaluator.EvalExpression (left);
-				SetValue (right, Value, nextChangeId);
+                Bind.SetValue(right, Value, nextChangeId);
 			}
 
 			nextChangeId++;
@@ -456,7 +560,7 @@ namespace Praeclarum.Bind
 
 				var changeId = nextChangeId++;
 				activeChangeIds.Add (changeId);
-				SetValue (dependentExpr, v, changeId);
+                Bind.SetValue(dependentExpr, v, changeId);
 				activeChangeIds.Remove (changeId);
 			} 
 //			else {
@@ -468,7 +572,7 @@ namespace Praeclarum.Bind
 		{
 			foreach (var t in triggers) {
 				if (t.ChangeAction != null) {
-					RemoveMemberChangeAction (t.ChangeAction);
+                    Bind.RemoveMemberChangeAction(t.ChangeAction);
 				}
 			}
 		}
@@ -476,7 +580,7 @@ namespace Praeclarum.Bind
 		static void Subscribe (List<Trigger> triggers, Action<int> action)
 		{
 			foreach (var t in triggers) {
-				t.ChangeAction = AddMemberChangeAction (Evaluator.EvalExpression (t.Expression), t.Member, action);
+                t.ChangeAction = Bind.AddMemberChangeAction(Evaluator.EvalExpression(t.Expression), t.Member, action);
 			}
 		}		
 		
@@ -522,6 +626,10 @@ namespace Praeclarum.Bind
 		}
 	}
 
+    #endregion
+
+    #region IOS hack
+
 	#if __IOS__
 	[MonoTouch.Foundation.Preserve]
 	static class PreserveEventsAndSettersHack
@@ -543,5 +651,8 @@ namespace Praeclarum.Bind
 		}
 	}
 	#endif
+
+    #endregion
+
 }
 
