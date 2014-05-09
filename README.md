@@ -16,7 +16,7 @@ This is especially useful when creating UI code where you want to display and ed
 
         public override void ViewDidLoad ()
         {
-            Binding.Create (() => nameEdit.Text == person.Name);
+            Bind.Create (() => nameEdit.Text == person.Name);
         }
     }
 
@@ -36,9 +36,9 @@ There is even a Portable Class Library version of the project that works on Prof
 
 ### Equality Binding
 
-Equality binding is the simplest use of the library. Equality bindings are specified using the `==` operator in a call to `Binding.Create`:
+Equality binding is the simplest use of the library. Equality bindings are specified using the `==` operator in a call to `Bind.Create`:
 
-    Binding.Create (() => left == right);
+    Bind.Create (() => left == right);
 
 where `left` and `right` are two values.
 
@@ -48,22 +48,22 @@ When initialized, the binding will attempt to assign `right` to `left`. If `left
 
 `Left` and `right` can be any expression ranging from simple constants up to long object walks:
     
-    Binding.Create (() => stateEdit.Text == person.Address.State);
+    Bind.Create (() => stateEdit.Text == person.Address.State);
 
 When this binding is created, the value of `person.Address.State` is assigned to the edit control's `Text` property. If the user changes that text, the values will be written back to `person.Address.State`.
 
 Bindings are symmetric, so you could just as well have written:
 
-    Binding.Create (() => person.Address.State == stateEdit.Text);
+    Bind.Create (() => person.Address.State == stateEdit.Text);
 
 Then only difference occurs at initialization: the `stateEdit.Text` value is assigned to the `person.Address.State` value instead of the other way around.
 
 
 #### Unbinding
 
-`Binding.Create` returns a `Binding` object with one member `Unbind`. Calling this method permanently removes the bindings. If you want them back, you will need to re-create them.
+`Bind.Create` returns a `Binding` object with one member `Unbind`. Calling this method permanently removes the bindings. If you want them back, you will need to re-create them.
 
-    var binding = Binding.Create (() => stateEdit.Text == person.Address.State);
+    var binding = Bind.Create (() => stateEdit.Text == person.Address.State);
 
     ...
 
@@ -74,13 +74,13 @@ Then only difference occurs at initialization: the `stateEdit.Text` value is ass
 
 You can create multiple bindings by chaining them together with the and operator `&&`:
 
-    Binding.Create (() => 
+    Bind.Create (() => 
         nameEdit.Text == person.Name &&
         stateEdit.Text == person.Address.State);
 
 This is useful if you want to unbind a lot of data bindings all at once:
 
-    var multipleBindings = Binding.Create (() => 
+    var multipleBindings = Bind.Create (() => 
         nameEdit.Text == person.Name &&
         stateEdit.Text == person.Address.State);
 
@@ -105,7 +105,7 @@ Consider the case of displaying a person's full name and allowing them to enter 
 
         public override void ViewDidLoad ()
         {
-            Binding.Create (() => 
+            Bind.Create (() => 
                 firstNameEdit.Text == person.FirstName &&
                 lastNameEdit.Text == person.LastName &&
                 fullNameLabel.Text == person.LastName + ", " + person.FirstName &&
@@ -126,7 +126,7 @@ You must call `Invalidate` to update a binding if the value comes from an object
 
 Invalidate takes a lambda returning the property that changed:
 
-    Binding.Invalidate (() => obj.Property);
+    Bind.Invalidate (() => obj.Property);
 
 
 #### Automatic Change Tracking
