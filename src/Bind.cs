@@ -1,18 +1,6 @@
-//
-//  Copyright 2013-2014 Frank A. Krueger
-//
-//    Licensed under the Apache License, Version 2.0 (the "License");
-//    you may not use this file except in compliance with the License.
-//    You may obtain a copy of the License at
-//
-//        http://www.apache.org/licenses/LICENSE-2.0
-//
-//    Unless required by applicable law or agreed to in writing, software
-//    distributed under the License is distributed on an "AS IS" BASIS,
-//    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-//    See the License for the specific language governing permissions and
-//    limitations under the License.
-//
+// Based on Copyright 2013-2014 Frank A. Krueger
+// Copyright 2014 - Muraad Nofal
+
 using System;
 using System.Linq.Expressions;
 using System.Collections.Generic;
@@ -21,697 +9,491 @@ using System.Reflection;
 using System.Diagnostics;
 using System.ComponentModel;
 
-namespace Praeclarum.Bind
-{
-    #region Bind static class, main api entry point.
 
-    // TODO: Maybe rename it to an other name? Is "Bind" too common? 
-    // TODO: "PBind" ?!
-    public static class Bind
+namespace Bind
+{
+    /// <summary>
+    /// NBind class for creating bindings between propertys
+    /// using expressions.
+    /// </summary>
+    /// <remarks>
+    /// Based on https://github.com/praeclarum/Bind. 
+    /// Heavily refactored and simplified.
+    /// </remarks>
+    public static class NBind
     {
         /// <summary>
-        /// Usage is:
-        ///     Bind.NotifyPropertyChanged( () => model.Property));
-        /// where model is an object that implements INotifyPropertyChanged.
-        /// My idea is that the Bind class could function as a main point to trigger all property changed propagation stuff.
-        /// If it is used in a WPF application this will simply trigger the "normal" mvvm mechanisms.
-        /// If bindings where created with Bind.Create and the binding has hooked into the PropertyChanged 
-        /// event handler (when one target side is INotifyPropertyChanged) then this method will
-        /// trigger the internal propagation. 
+        /// Create a binding from given expression
         /// </summary>
-        /// <typeparam name="T">Type of the target object. Must be INotifyPropertyChanged.</typeparam>
-        /// <param name="propertyExpr">Expression of the form () => model.Property.</param>
-        /// <param name="pred">Currently unused.</param>
-        /// <returns>True if PropertyChanged was successfully triggered on the target object of type T,
-        /// false otherwise.</returns>
-        public static bool NotifyPropertyChanged<T>(Expression<Func<T>> propertyExpr, Func<bool> pred = null)
-            where T : INotifyPropertyChanged
+        /// <typeparam name="T">The binding expression result type (Is always bool)</typeparam>
+        /// <param name="bindingExpression">The binding expression</param>
+        /// <returns>An IDisposable that can be used to remove the binding when Dispose() is called</returns>
+        public static IDisposable Bind<T>(Expression<Func<T>> bindingExpression)
         {
-            bool result = false;
-            T target = default(T);
-
-            var memberExpr = propertyExpr.Body as MemberExpression;
-
-            if (memberExpr == null)
-                throw new ArgumentException("Given expression is not a MemberExpression", "outExpr");
-
-            // propertyExpr is () => target.Property
-            // we need the target here.
-            target = (T)Evaluator.EvalExpression(memberExpr);
-
-            if (target == null)
-                throw new ArgumentException("Target to call PropertyChanged is null", "target");
-
-            var property = memberExpr.Member as PropertyInfo;
-            if (property == null)
-                throw new ArgumentException("Given expression member is not a PropertyInfo", "outExpr");
-
-            var propChangedArgs = new PropertyChangedEventArgs(property.Name);
-
-            // Event info is always not null because the constraint on T is INotifyPropertyChanged
-            var eventInfo = target.GetType().GetRuntimeEvent("PropertyChanged");
-
-            // TODO: God or bad to use try? Better let the exception fall through?
-            try
-            {
-                // like target.PropertyChanged(target, propChangedArgs)
-                eventInfo.RaiseMethod.Invoke(target, new object[] { target, propChangedArgs });
-            }
-            catch
-            {
-                result = false;
-            }
-            return result;
+            var bindings = DisposableBindingsFromAndAlsoExpressions(GetAndAlsoExpressions(bindingExpression.Body));
+            return Disposable.CreateContainer(bindings.ToArray());
         }
-
-        // UNUSED:
-        /*
-        public static bool NotifyPropertyChanged<T>(this T target, Expression<Func<T>> propertyExpr, Func<bool> pred = null)
-            where T : INotifyPropertyChanged
-        {
-            bool result = false;
-
-            if (target == null)
-                throw new ArgumentException("Target to call PropertyChanged is null", "target");
-
-            var expr = propertyExpr.Body as MemberExpression;
-
-            if (expr == null)
-                throw new ArgumentException("Given expression is not a MemberExpression", "outExpr");
-
-            var property = expr.Member as PropertyInfo;
-            if (property == null)
-                throw new ArgumentException("Given expression member is not a PropertyInfo", "outExpr");
-
-            var propChangedArgs = new PropertyChangedEventArgs(property.Name);
-
-            // Event info is always not null because the constraint on T is INotifyPropertyChanged
-            var eventInfo = target.GetType().GetRuntimeEvent("PropertyChanged");
-
-            try
-            {
-                // like target.PropertyChanged(target, propChangedArgs)
-                eventInfo.RaiseMethod.Invoke(target, new object[] { target, propChangedArgs });
-            }
-            catch
-            {
-                result = false;
-            }
-            return result;
-        }*/
-
-
-        #region Static Create, BindExpression and SetValue
 
         /// <summary>
-        /// Uses the lambda expression to create data bindings.
-        /// Equality expression (==) become data bindings.
-        /// And expressions (&&) can be used to group the data bindings.
+        /// Creates a binding and returns a new IDisposable
+        /// that when called is disposing the binding and the given disposable
+        /// at once.
         /// </summary>
-        /// <param name="specifications">The binding specifications.</param>
-        public static Binding Create<T>(Expression<Func<T>> specifications)
+        /// <typeparam name="T">The binding expression result type (Is always bool)</typeparam>
+        /// <param name="disposable">The disposable</param>
+        /// <param name="bindingExpression">The binding expression</param>
+        /// <returns>An IDisposable that can be used to remove the binding and to dispose the given IDisposable at once/returns>
+        public static IDisposable Bind<T>(this IDisposable disposable, Expression<Func<T>> bindingExpression)
         {
-            return BindExpression(specifications.Body);
+            IDisposable binding = Bind<T>(bindingExpression);
+            return Disposable.CreateContainer(binding, disposable);
         }
 
-        static Binding BindExpression(Expression expr)
+        #region Private
+
+        #region Break down Expression into AndAlso List<Expression> and then create bindings
+
+        /// <summary>
+        /// Split the given Expression into seperated AndAlso (&&) expressions.
+        /// </summary>
+        /// <param name="expr">The untyped Expression.</param>
+        /// <returns>The given Expression split into expressions seperated by AndAlso (&&).</returns>
+        static List<Expression> GetAndAlsoExpressions(Expression expr)
         {
-            //
-            // Is this a group of bindings
-            //
+            var parts = new List<Expression>();
+
             if (expr.NodeType == ExpressionType.AndAlso)
             {
-
                 var b = (BinaryExpression)expr;
 
-                var parts = new List<Expression>();
+                SplitAndAlsoExpressions(parts, b);
 
-                while (b != null)
-                {
-                    var l = b.Left;
-                    parts.Add(b.Right);
-                    if (l.NodeType == ExpressionType.AndAlso)
-                    {
-                        b = (BinaryExpression)l;
-                    }
-                    else
-                    {
-                        parts.Add(l);
-                        b = null;
-                    }
-                }
-
+                // The parse process was from right (end) to left (start).
+                // So reverse the expression list.
                 parts.Reverse();
 
-                return new MultipleBindings(parts.Select(BindExpression));
+                parts.Select(GetAndAlsoExpressions).ToArray().ForEach(parts.AddRange);
             }
-
-            //
-            // Are we binding two values?
-            //
-            if (expr.NodeType == ExpressionType.Equal)
-            {
-                var b = (BinaryExpression)expr;
-                return new EqualityBinding(b.Left, b.Right);
-            }
-
-            //
-            // This must be a new object binding (a template)
-            //
-            throw new NotSupportedException("Only equality bindings are supported.");
+            return parts;
         }
 
-        internal static bool SetValue(Expression expr, object value, int changeId)
+        static void SplitAndAlsoExpressions(List<Expression> parts, BinaryExpression b)
         {
-            if (expr.NodeType == ExpressionType.MemberAccess)
+            // split all expressions
+            while (b != null)
             {
-                var m = (MemberExpression)expr;
-                var mem = m.Member;
+                // get left part of the binary expression.
+                var l = b.Left;
 
-                var target = Evaluator.EvalExpression(m.Expression);
+                // the right part have to be also non complex type! See readme at github.
+                // So just add it to the expression part list.
+                parts.Add(b.Right);
 
-                var f = mem as FieldInfo;
-                var p = mem as PropertyInfo;
-
-                if (f != null)
-                {
-                    f.SetValue(target, value);
-                }
-                else if (p != null)
-                {
-                    p.SetValue(target, value, null);
-                }
+                // If this is again no "==" expression, then get the next binary expr
+                // and start again.
+                if (l.NodeType == ExpressionType.AndAlso)
+                    b = (BinaryExpression)l;
                 else
                 {
-                    ReportError("Trying to SetValue on " + mem.GetType() + " member");
-                    return false;
+                    // horray, the end is reached, we have the last "==" expression.
+                    parts.Add(l);
+                    b = null;
                 }
+            }
+        }
 
-                InvalidateMember(target, mem, changeId);
+        /// <summary>
+        /// Creates a binding (IDisposable) for every given seperated Expression that is of type ExpressionType.Equal
+        /// </summary>
+        /// <remarks>
+        /// Takes results from GetAndAlsoExpressions(..)
+        /// </remarks>
+        /// <param name="parts">The given expressions.</param>
+        /// <returns>The a list of IDisposables, one for every created binding, that can be used for unbinding.</returns>
+        static List<IDisposable> DisposableBindingsFromAndAlsoExpressions(IEnumerable<Expression> parts)
+        {
+            List<IDisposable> result = new List<IDisposable>();
+            foreach (var part in parts)
+            {
+                if (part.NodeType == ExpressionType.Equal)
+                {
+                    var b = (BinaryExpression)part;
+                    result.Add(CreateBinding(b.Left, b.Right));
+                }
+            }
+            return result;
+        }
+
+        #endregion
+
+        #region Create IDisposable binding (simple or complex) from left and right expression
+
+        /// <summary>
+        /// Creates a binding from given left and right expression parts.
+        /// </summary>
+        /// <remarks>
+        /// Parts are from an ExpressionType.Equal.
+        /// Left expression have to be an ExpressionType.MemberAccess!
+        /// But thats not that hard. Compiler/TypeChecker is taking care this cannot happen.
+        /// </remarks>
+        /// <param name="left">The left expression. Note type have to be ExpressionType.MemberAccess</param>
+        /// <param name="right">The right (complex) expression</param>
+        /// <returns>An IDisposable representing the created binding. Dispose for unbinding. Null if binding not created.</returns>
+        static IDisposable CreateBinding(Expression left, Expression right)
+        {
+            if (left.NodeType != ExpressionType.MemberAccess)
+                throw new ArgumentException("NOT ALLOWED");
+
+            IDisposable result = null;
+            if (right.NodeType == ExpressionType.MemberAccess)   // right is simple too
+                result = CreateSimpleBinding(left, right);
+            else
+                result = CreateComplex(left, right);
+            return result;
+        }
+
+        #region Create simple binding
+
+        static IDisposable CreateSimpleBinding(Expression left, Expression right)
+        {
+            BindingMember leftB = BindingMember.FromExpression(left as MemberExpression);
+            BindingMember rightB = BindingMember.FromExpression(right as MemberExpression);
+
+            DisposableContainer disposable = new DisposableContainer();
+            // left GetMethod is available and right set method too
+            // -> when left property changes then set right property
+            CreateSimpleLeftToRight(leftB, rightB, disposable);
+            CreateSimpleRightToLeft(leftB, rightB, disposable);
+            return disposable;
+        }
+
+        private static void CreateSimpleRightToLeft(BindingMember leftB, BindingMember rightB, DisposableContainer disposable)
+        {
+            if (leftB.SetMethod != null && rightB.GetMethod != null)
+            {
+                disposable.AddDisposable(AddChangeNotificationEventHandler(rightB.Target, rightB.PropertyName, () =>
+                {
+                    leftB.SetMethod(rightB.GetMethod());
+                }));
+            }
+        }
+
+        private static void CreateSimpleLeftToRight(BindingMember leftB, BindingMember rightB, DisposableContainer disposable)
+        {
+            if (leftB.GetMethod != null && rightB.SetMethod != null)
+            {
+                disposable.AddDisposable(AddChangeNotificationEventHandler(leftB.Target, leftB.PropertyName, () =>
+                {
+                    rightB.SetMethod(leftB.GetMethod());
+                }));
+            }
+        }
+
+        #endregion
+
+        #region Create complex binding
+
+        static IDisposable CreateComplex(Expression left, Expression right)
+        {
+            DisposableContainer disposable = new DisposableContainer();
+            var leftMemEx = left as MemberExpression;
+
+            // Get the instance the property belongs too
+            object leftTarget = NBind.EvalExpression(leftMemEx.Expression);
+            // Get the property name
+            string propertyName = leftMemEx.Member.Name;
+
+            // Get a setter function for the property
+            var propInfo = leftTarget.GetType().GetTypeInfo().DeclaredProperties.First(p => p.Name == propertyName);
+            Action<object, object> setter = (target, value) => propInfo.SetMethod.Invoke(target, new object[] { value });
+
+            // Create an action that is called whenever one of the propertys in the right expression is changing
+            Action rightChangedAction = () => setter(leftTarget, (NBind.EvalExpression(right)));
+
+            //Get all right side triggers and create a complex binding (IDisposable) from it
+            return SubscribeToRightSidePropertys(rightChangedAction, RightTriggerFromComplexExpression(right));
+        }
+
+        static IDisposable SubscribeToRightSidePropertys(
+            Action rightChangedAction, List<Tuple<Expression, MemberInfo>> rightTrigger)
+        {
+            Type typeNotifyPropertyChanged = typeof(INotifyPropertyChanged);
+            DisposableContainer disposable = new DisposableContainer();
+            // For all propertys on the right side
+            foreach (var expr in rightTrigger)
+            {
+                // IF this is a property access expression
+                if (expr.Item1.NodeType == ExpressionType.MemberAccess)
+                {
+                    var memEx = expr.Item1 as MemberExpression;
+
+                    // Get the type this property belongs too and check if it is implementing INotifyPropertyChanged
+                    if (typeNotifyPropertyChanged.GetTypeInfo().IsAssignableFrom(memEx.Type.GetTypeInfo()))
+                    {
+                        // Register at PropertyChangedEventHandler and add the unsubscribing IDisposable to the container.
+                        disposable.AddDisposable(
+                            AddChangeNotificationEventHandler(
+                                NBind.EvalExpression(memEx),     // get instance that declares the current right side property
+                                expr.Item2.Name,            // the property name where to subscribe to property changed
+                                rightChangedAction));       // the action that is updating the left side property when right side changes
+                    }
+                }
+            }
+            return disposable;
+        }
+
+        #endregion
+
+        #endregion
+
+        #region AddChangeNotificationEventHandler action to target with given property name
+
+        static IDisposable AddChangeNotificationEventHandler(object target, string propertyName, Action action)
+        {
+            IDisposable binding = null;
+            var npc = target as INotifyPropertyChanged;
+            if (npc != null)
+            {
+                PropertyChangedEventHandler handler = (obj, args) =>
+                {
+                    if (args.PropertyName == propertyName)
+                        action();
+                };
+                npc.PropertyChanged += handler;
+                binding = Disposable.Create(() => npc.PropertyChanged -= handler);
+            }
+            return binding;
+        }
+
+        #endregion
+
+        #region Get left and right triggers from simple and complex expressions
+
+        static Tuple<Expression, MemberInfo> LeftTriggerFromMemberExpression(Expression expr)
+        {
+            //This expression represents a field or property of an instance.
+            var m = (MemberExpression)expr;
+            return Tuple.Create(m.Expression, m.Member);
+        }
+
+        static List<Tuple<Expression, MemberInfo>> RightTriggerFromComplexExpression(Expression expr, List<Tuple<Expression, MemberInfo>> ts = null)
+        {
+            List<Tuple<Expression, MemberInfo>> triggers = ts == null ? new List<Tuple<Expression, MemberInfo>>() : ts;
+            GetBindingMembers(expr, triggers);
+            return triggers;
+        }
+
+        static void GetBindingMembers(Expression s, List<Tuple<Expression, MemberInfo>> triggers)
+        {
+            if (s.NodeType == ExpressionType.MemberAccess)
+                triggers.Add(LeftTriggerFromMemberExpression(s));
+            else
+            {
+                var b = s as BinaryExpression;
+                if (b != null)
+                {
+                    GetBindingMembers(b.Left, triggers);
+                    GetBindingMembers(b.Right, triggers);
+                }
+            }
+        }
+
+        #endregion
+
+        #endregion
+
+        #region Private class BindingMember for simple binding case
+
+        class BindingMember
+        {
+            public static BindingMember FromExpression(MemberExpression memEx)
+            {
+                object target = NBind.EvalExpression(memEx.Expression);
+                string propName = memEx.Member.Name;
+                PropertyInfo propInfo = target.GetType().GetTypeInfo().DeclaredProperties.First(p => p.Name == propName);
+
+                return new BindingMember()
+                {
+                    Target = target,
+                    PropertyName = propName,
+                    GetMethod = () => propInfo.GetMethod.Invoke(target, null), //  propInfo.GetAccessor<object>(target),
+                    SetMethod = obj => propInfo.SetMethod.Invoke(target, new object[] { obj })  //propInfo.SetAccessor<object>(target)
+                };
+            }
+
+            public object Target { get; set; }
+            public string PropertyName { get; set; }
+            public Func<object> GetMethod { get; set; }
+            public Action<object> SetMethod { get; set; }
+        }
+
+        #endregion
+
+        public static object EvalExpression(Expression operation)
+        {
+            object value;
+            if (!TryEvaluate(operation, out value))
+            {
+                // use compile / invoke as a fall-back
+                value = Expression.Lambda(operation).Compile().DynamicInvoke();
+            }
+            return value;
+        }
+
+        private static bool TryEvaluate(Expression operation, out object value)
+        {
+            if (operation == null)
+            {   // used for static fields, etc
+                value = null;
                 return true;
             }
-
-            ReportError("Trying to SetValue on " + expr.NodeType + " expression");
-            return false;
-        }
-
-        #endregion
-
-        #region Global error handling
-
-        public static event Action<string> Error = delegate { };
-
-        static void ReportError(string message)
-        {
-            Debug.WriteLine(message);
-            Error(message);
-        }
-
-        static void ReportError(object errorObject)
-        {
-            ReportError(errorObject.ToString());
-        }
-
-        #endregion
-
-        #region objectSubs field, internal static AddMemberChangeAction/RemoveMemberChangeAction/InvalidateMember
-
-        static readonly Dictionary<Tuple<Object, MemberInfo>, MemberActions> objectSubs = 
-            new Dictionary<Tuple<Object, MemberInfo>, MemberActions>();
-
-        internal static MemberChangeAction AddMemberChangeAction(object target, MemberInfo member, Action<int> k)
-        {
-            var key = Tuple.Create(target, member);
-            MemberActions subs;
-            if (!objectSubs.TryGetValue(key, out subs))
+            switch (operation.NodeType)
             {
-                subs = new MemberActions(target, member);
-                objectSubs.Add(key, subs);
-            }
-
-            //			Debug.WriteLine ("ADD CHANGE ACTION " + target + " " + member);
-            var sub = new MemberChangeAction(target, member, k);
-            subs.AddAction(sub);
-            return sub;
-        }
-
-        internal static void RemoveMemberChangeAction(MemberChangeAction sub)
-        {
-            var key = Tuple.Create(sub.Target, sub.Member);
-            MemberActions subs;
-            if (objectSubs.TryGetValue(key, out subs))
-            {
-                //				Debug.WriteLine ("REMOVE CHANGE ACTION " + sub.Target + " " + sub.Member);
-                subs.RemoveAction(sub);
-            }
-        }
-
-        /// <summary>
-        /// Invalidate the specified object member. This will cause all actions
-        /// associated with that member to be executed.
-        /// This is the main mechanism by which binding values are distributed.
-        /// </summary>
-        /// <param name="target">Target object</param>
-        /// <param name="member">Member of the object that changed</param>
-        /// <param name="changeId">Change identifier</param>
-        public static void InvalidateMember(object target, MemberInfo member, int changeId = 0)
-        {
-            var key = Tuple.Create(target, member);
-            MemberActions subs;
-            if (objectSubs.TryGetValue(key, out subs))
-            {
-                //				Debug.WriteLine ("INVALIDATE {0} {1}", target, member.Name);
-                subs.Notify(changeId);
-            }
-        }
-
-        #endregion
-    }
-
-    #endregion
-
-
-    #region Abstract Binding class
-
-    /// <summary>
-	/// Abstract class that represents bindings between values in an applications.
-	/// Binding are created using Create and removed by calling Unbind.
-	/// </summary>
-	public abstract class Binding
-	{
-		/// <summary>
-		/// Unbind this instance. This cannot be undone.
-		/// </summary>
-		public virtual void Unbind ()
-		{
-		}
-    }
-
-    #endregion
-
-    #region MemberActions class for internal usage only
-
-    /// <summary>
-    /// This class stores everything needed to bind to an object property.
-    /// Internally it has a list of MemberChangedAction´s.
-    /// </summary>
-    internal class MemberActions
-    {
-        #region Static GetEvent() (EventInfo) for type and event name, and CreateGenericEventHandler() (delegate) from EventInfo and action
-        
-        static EventInfo GetEvent(Type type, string eventName)
-        {
-            var t = type;
-            while (t != null && t != typeof(object))
-            {
-                var ti = t.GetTypeInfo();
-                var ev = t.GetTypeInfo().GetDeclaredEvent(eventName);
-                if (ev != null)
-                    return ev;
-                t = ti.BaseType;
-            }
-            return null;
-        }
-
-        static Delegate CreateGenericEventHandler(EventInfo evt, Action d)
-        {
-            var handlerType = evt.EventHandlerType;
-            var handlerTypeInfo = handlerType.GetTypeInfo();
-            var handlerInvokeInfo = handlerTypeInfo.GetDeclaredMethod("Invoke");
-            var eventParams = handlerInvokeInfo.GetParameters();
-
-            //lambda: (object x0, EventArgs x1) => d()
-            var parameters = eventParams.Select(p => Expression.Parameter(p.ParameterType, p.Name)).ToArray();
-            var body = Expression.Call(Expression.Constant(d), d.GetType().GetTypeInfo().GetDeclaredMethod("Invoke"));
-            var lambda = Expression.Lambda(body, parameters);
-
-            return lambda.Compile();
-        }
-
-        #endregion
-
-        #region Private variables target, member, eventInfo, eventHandlers and actions list
-
-        // target and member are also used as a "key" for a Dictionary
-        readonly object target;
-        readonly MemberInfo member;
-
-        EventInfo eventInfo;
-        Delegate eventHandler;
-        readonly List<MemberChangeAction> actions = new List<MemberChangeAction>();
-
-        #endregion
-
-        public MemberActions(object target, MemberInfo mem)
-        {
-            this.target = target;
-            member = mem;
-        }
-
-        void AddChangeNotificationEventHandler()
-        {
-            if (target != null)
-            {
-                var npc = target as INotifyPropertyChanged;
-                if (npc != null && (member is PropertyInfo))
-                {
-                    npc.PropertyChanged += HandleNotifyPropertyChanged;
-                }
-                else
-                {
-                    AddHandlerForFirstExistingEvent(member.Name + "Changed", "EditingDidEnd", "ValueChanged", "Changed");
-                    //						if (!added) {
-                    //							Debug.WriteLine ("Failed to bind to change event for " + target);
-                    //						}
-                }
-            }
-        }
-
-        bool AddHandlerForFirstExistingEvent(params string[] names)
-        {
-            var type = target.GetType();
-            foreach (var name in names)
-            {
-                var ev = GetEvent(type, name);
-
-                if (ev != null)
-                {
-                    eventInfo = ev;
-                    var isClassicHandler = typeof(EventHandler).GetTypeInfo().IsAssignableFrom(ev.EventHandlerType.GetTypeInfo());
-
-                    eventHandler = isClassicHandler ?
-                        (EventHandler)HandleAnyEvent :
-                        CreateGenericEventHandler(ev, () => HandleAnyEvent(null, EventArgs.Empty));
-
-                    ev.AddEventHandler(target, eventHandler);
-                    Debug.WriteLine("BIND: Added handler for {0} on {1}", eventInfo.Name, target);
+                case ExpressionType.Constant:
+                    value = ((ConstantExpression)operation).Value;
                     return true;
-                }
+                case ExpressionType.MemberAccess:
+                    MemberExpression me = (MemberExpression)operation;
+                    object target;
+                    if (TryEvaluate(me.Expression, out target))
+                    { // instance target
+                        if (me.Member is FieldInfo)
+                        {
+                            value = ((FieldInfo)me.Member).GetValue(target);
+                            return true;
+                        }
+                        else if (me.Member is PropertyInfo)
+                        {
+                            value = ((PropertyInfo)me.Member).GetValue(target, null);
+                            return true;
+                        }
+                    }
+                    break;
             }
+            value = null;
             return false;
         }
+    }
 
-        void UnsubscribeFromChangeNotificationEvent()
+    #region Helper 
+
+    public static class EnumerableExtensions
+    {
+        public static void ForEach<T>(this IEnumerable<T> enumerable, Action<T> action)
         {
-            var npc = target as INotifyPropertyChanged;
-            if (npc != null && (member is PropertyInfo))
+            foreach (var item in enumerable)
+                action(item);
+        }
+    }
+    public interface IDisposableContainer : IDisposable
+    {
+        List<IDisposable> Disposables { get; }
+    }
+
+    public static class IDisposableContainerExtensions
+    {
+        public static void AddDisposable<T>(this T subscriptable, IDisposable disposable)
+            where T : IDisposableContainer
+        {
+            if (subscriptable != null && subscriptable.Disposables != null)
+                subscriptable.Disposables.Add(disposable);
+        }
+
+        public static void AddDisposable<T>(this T disposableContainer, Action onDispose)
+            where T : IDisposableContainer
+        {
+            if (onDispose != null)
+                disposableContainer.Disposables.Add(Disposable.Create(onDispose));
+        }
+
+        public static void DisposeSubscriptions<T>(this T subscriptable)
+            where T : IDisposableContainer
+        {
+            if (subscriptable.Disposables != null)
+                subscriptable.Disposables.ForEach(s => s.Dispose());
+        }
+
+    }
+
+    public class DisposableContainer : IDisposableContainer
+    {
+
+        public DisposableContainer(Action onDispose = null, params IDisposable[] disposables)
+        {
+            if (onDispose != null)
+                this.AddDisposable(onDispose);
+            disposables.ForEach(d => this.AddDisposable(d));
+        }
+
+        public DisposableContainer(params Action[] onDispose)
+        {
+            onDispose.ForEach(od => this.AddDisposable(od));
+        }
+
+        public void Dispose()
+        {
+            this.DisposeSubscriptions();
+        }
+
+        public List<IDisposable> Disposables
+        {
+            get;
+            private set;
+        }
+    }
+
+    public class DelegateDisposable : IDisposable
+    {
+        public Action OnDispose { get; set; }
+
+        public DelegateDisposable(Action onDispose = null)
+        {
+            if (onDispose != null)
+                OnDispose = onDispose;
+        }
+
+        public void Dispose()
+        {
+            if (OnDispose != null)
+                OnDispose();
+        }
+    }
+
+    public static class Disposable
+    {
+        public static IDisposable AsDisposable(this Action onDispose)
+        {
+            return new DelegateDisposable(onDispose);
+        }
+
+        public static IDisposable Create(Action onDispose)
+        {
+            return new DelegateDisposable(onDispose);
+        }
+
+        public static IDisposable Create<T>(T reference, Action<T> onDispose)
+            where T : class
+        {
+            WeakReference<T> weakReference = new WeakReference<T>(reference);
+            return new DelegateDisposable(() =>
             {
-                npc.PropertyChanged -= HandleNotifyPropertyChanged;
-                return;
-            }
-
-            if (eventInfo == null)
-                return;
-
-            eventInfo.RemoveEventHandler(target, eventHandler);
-
-            Debug.WriteLine("BIND: Removed handler for {0} on {1}", eventInfo.Name, target);
-
-            eventInfo = null;
-            eventHandler = null;
+                T target = null;
+                if (weakReference.TryGetTarget(out target))
+                    onDispose(target);
+            });
         }
 
-        void HandleNotifyPropertyChanged(object sender, PropertyChangedEventArgs e)
+        public static DisposableContainer CreateContainer(params Action[] onDispose)
         {
-            if (e.PropertyName == member.Name)
-                Bind.InvalidateMember(target, member);
+            return new DisposableContainer(onDispose);
         }
 
-        void HandleAnyEvent(object sender, EventArgs e)
+        public static DisposableContainer CreateContainer(params IDisposable[] disposables)
         {
-            Bind.InvalidateMember(target, member);
-        }
-
-        /// <summary>
-        /// Add the specified action to be executed when Notify() is called.
-        /// </summary>
-        /// <param name="action">Action.</param>
-        public void AddAction(MemberChangeAction action)
-        {
-            if (actions.Count == 0)
-            {
-                AddChangeNotificationEventHandler();
-            }
-
-            actions.Add(action);
-        }
-
-        public void RemoveAction(MemberChangeAction action)
-        {
-            actions.Remove(action);
-
-            if (actions.Count == 0)
-            {
-                UnsubscribeFromChangeNotificationEvent();
-            }
-        }
-
-        /// <summary>
-        /// Execute all the actions.
-        /// </summary>
-        /// <param name="changeId">Change identifier.</param>
-        public void Notify(int changeId)
-        {
-            foreach (var s in actions)
-            {
-                s.Notify(changeId);
-            }
+            return new DisposableContainer(null, disposables);
         }
     }
 
     #endregion
-
-    #region MemberChangeAction class for internal usage only
-
-    /// <summary>
-	/// An action tied to a particular member of an object.
-	/// When Notify is called, the action is executed.
-	/// </summary>
-	internal class MemberChangeAction
-	{
-		readonly Action<int> action;
-
-		public object Target { get; private set; }
-		public MemberInfo Member { get; private set; }
-
-		public MemberChangeAction (object target, MemberInfo member, Action<int> action)
-		{
-			Target = target;
-			if (member == null)
-				throw new ArgumentNullException ("member");
-			Member = member;
-			if (action == null)
-				throw new ArgumentNullException ("action");
-			this.action = action;
-		}
-
-		public void Notify (int changeId)
-		{
-			action (changeId);
-		}
-	}
-
-    #endregion
-
-    #region Static linq expression evaluator class
-
-    /// <summary>
-	/// Methods that can evaluate Linq expressions.
-	/// </summary>
-	static class Evaluator
-	{
-		/// <summary>
-		/// Gets the value of a Linq expression.
-		/// </summary>
-		/// <param name="expr">The expresssion.</param>
-		public static object EvalExpression (Expression expr)
-		{
-			//
-			// Easy case
-			//
-			if (expr.NodeType == ExpressionType.Constant) {
-				return ((ConstantExpression)expr).Value;
-			}
-			
-			//
-			// General case
-			//
-//			Debug.WriteLine ("WARNING EVAL COMPILED {0}", expr);
-			var lambda = Expression.Lambda (expr, Enumerable.Empty<ParameterExpression> ());
-			return lambda.Compile ().DynamicInvoke ();
-		}
-	}
-
-    #endregion
-
-    #region Equality and multiple bindings class
-
-    /// <summary>
-	/// Binding between two values. When one changes, the other
-	/// is set.
-	/// </summary>
-	class EqualityBinding : Binding
-	{
-		object Value;
-
-		class Trigger
-		{
-			public Expression Expression;
-			public MemberInfo Member;
-			public MemberChangeAction ChangeAction;
-		}
-		
-		readonly List<Trigger> leftTriggers = new List<Trigger> ();
-		readonly List<Trigger> rightTriggers = new List<Trigger> ();
-		
-		public EqualityBinding (Expression left, Expression right)
-		{
-			// Try evaling the right and assigning left
-			Value = Evaluator.EvalExpression (right);
-			var leftSet = Bind.SetValue (left, Value, nextChangeId);
-
-			// If that didn't work, then try the other direction
-			if (!leftSet) {
-				Value = Evaluator.EvalExpression (left);
-                Bind.SetValue(right, Value, nextChangeId);
-			}
-
-			nextChangeId++;
-
-			CollectTriggers (left, leftTriggers);
-			CollectTriggers (right, rightTriggers);
-
-			Resubscribe (leftTriggers, left, right);
-			Resubscribe (rightTriggers, right, left);
-		}
-
-		public override void Unbind ()
-		{
-			Unsubscribe (leftTriggers);
-			Unsubscribe (rightTriggers);
-			base.Unbind ();
-		}
-
-		void Resubscribe (List<Trigger> triggers, Expression expr, Expression dependentExpr)
-		{
-			Unsubscribe (triggers);
-			Subscribe (triggers, changeId => OnSideChanged (expr, dependentExpr, changeId));
-		}
-
-		int nextChangeId = 1;
-		readonly HashSet<int> activeChangeIds = new HashSet<int> ();
-		
-		void OnSideChanged (Expression expr, Expression dependentExpr, int causeChangeId)
-		{
-			if (activeChangeIds.Contains (causeChangeId))
-				return;
-
-			var v = Evaluator.EvalExpression (expr);
-			
-			if (v == null && Value == null)
-				return;
-			
-			if ((v == null && Value != null) ||
-				(v != null && Value == null) ||
-				((v is IComparable) && ((IComparable)v).CompareTo (Value) != 0)) {
-				
-				Value = v;
-
-				var changeId = nextChangeId++;
-				activeChangeIds.Add (changeId);
-                Bind.SetValue(dependentExpr, v, changeId);
-				activeChangeIds.Remove (changeId);
-			} 
-//			else {
-//				Debug.WriteLine ("Prevented needless update");
-//			}
-		}
-
-		static void Unsubscribe (List<Trigger> triggers)
-		{
-			foreach (var t in triggers) {
-				if (t.ChangeAction != null) {
-                    Bind.RemoveMemberChangeAction(t.ChangeAction);
-				}
-			}
-		}
-		
-		static void Subscribe (List<Trigger> triggers, Action<int> action)
-		{
-			foreach (var t in triggers) {
-                t.ChangeAction = Bind.AddMemberChangeAction(Evaluator.EvalExpression(t.Expression), t.Member, action);
-			}
-		}		
-		
-		void CollectTriggers (Expression s, List<Trigger> triggers)
-		{
-			if (s.NodeType == ExpressionType.MemberAccess) {
-				
-				var m = (MemberExpression)s;
-				CollectTriggers (m.Expression, triggers);
-				var t = new Trigger { Expression = m.Expression, Member = m.Member };
-				triggers.Add (t);
-
-			} else {
-				var b = s as BinaryExpression;
-				if (b != null) {
-					CollectTriggers (b.Left, triggers);
-					CollectTriggers (b.Right, triggers);
-				}
-			}
-		}
-	}
-
-
-	/// <summary>
-	/// Multiple bindings grouped under a single binding to make adding and removing easier.
-	/// </summary>
-	class MultipleBindings : Binding
-	{
-		readonly List<Binding> bindings;
-
-		public MultipleBindings (IEnumerable<Binding> bindings)
-		{
-			this.bindings = bindings.Where (x => x != null).ToList ();
-		}
-
-		public override void Unbind ()
-		{
-			base.Unbind ();
-			foreach (var b in bindings) {
-				b.Unbind ();
-			}
-			bindings.Clear ();
-		}
-	}
-
-    #endregion
-
-    #region IOS hack
-
-	#if __IOS__
-	[MonoTouch.Foundation.Preserve]
-	static class PreserveEventsAndSettersHack
-	{
-		[MonoTouch.Foundation.Preserve]
-		static void Hack ()
-		{
-			var l = new MonoTouch.UIKit.UILabel ();
-			l.Text = l.Text + "";
-
-			var tf = new MonoTouch.UIKit.UITextField ();
-			tf.Text = tf.Text + "";
-			tf.EditingDidEnd += delegate {};
-			tf.ValueChanged += delegate {};
-
-			var vc = new MonoTouch.UIKit.UIViewController ();
-			vc.Title = vc.Title + "";
-			vc.Editing = !vc.Editing;
-		}
-	}
-	#endif
-
-    #endregion
-
 }
 
