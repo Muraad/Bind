@@ -28,25 +28,10 @@ namespace Bind
         /// <typeparam name="T">The binding expression result type (Is always bool)</typeparam>
         /// <param name="bindingExpression">The binding expression</param>
         /// <returns>An IDisposable that can be used to remove the binding when Dispose() is called</returns>
-        public static IDisposable Bind<T>(Expression<Func<T>> bindingExpression)
+        public static IDisposable Create<T>(Expression<Func<T>> bindingExpression)
         {
             var bindings = DisposableBindingsFromAndAlsoExpressions(GetAndAlsoExpressions(bindingExpression.Body));
             return Disposable.CreateContainer(bindings.ToArray());
-        }
-
-        /// <summary>
-        /// Creates a binding and returns a new IDisposable
-        /// that when called is disposing the binding and the given disposable
-        /// at once.
-        /// </summary>
-        /// <typeparam name="T">The binding expression result type (Is always bool)</typeparam>
-        /// <param name="disposable">The disposable</param>
-        /// <param name="bindingExpression">The binding expression</param>
-        /// <returns>An IDisposable that can be used to remove the binding and to dispose the given IDisposable at once/returns>
-        public static IDisposable Bind<T>(this IDisposable disposable, Expression<Func<T>> bindingExpression)
-        {
-            IDisposable binding = Bind<T>(bindingExpression);
-            return Disposable.CreateContainer(binding, disposable);
         }
 
         #region Private
@@ -74,6 +59,13 @@ namespace Bind
 
                 parts.Select(GetAndAlsoExpressions).ToArray().ForEach(parts.AddRange);
             }
+
+            if (expr.NodeType == ExpressionType.Equal)
+            {
+                var b = (BinaryExpression)expr;
+                parts.Add(expr);
+            }
+
             return parts;
         }
 
@@ -287,6 +279,14 @@ namespace Bind
         {
             if (s.NodeType == ExpressionType.MemberAccess)
                 triggers.Add(LeftTriggerFromMemberExpression(s));
+            else if(s.NodeType == ExpressionType.Call)
+            {
+                var b = s as MethodCallExpression;
+                if(b != null)
+                {
+                    b.Arguments.ForEach(argExpr => GetBindingMembers(argExpr, triggers));
+                }
+            }
             else
             {
                 var b = s as BinaryExpression;
@@ -316,8 +316,8 @@ namespace Bind
                 {
                     Target = target,
                     PropertyName = propName,
-                    GetMethod = () => propInfo.GetMethod.Invoke(target, null), //  propInfo.GetAccessor<object>(target),
-                    SetMethod = obj => propInfo.SetMethod.Invoke(target, new object[] { obj })  //propInfo.SetAccessor<object>(target)
+                    GetMethod = () => propInfo.GetMethod.Invoke(target, null),
+                    SetMethod = obj => propInfo.SetMethod.Invoke(target, new object[] { obj })
                 };
             }
 
