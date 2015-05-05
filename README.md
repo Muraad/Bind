@@ -4,8 +4,30 @@ See https://github.com/praeclarum/Bind for full explanation.
 This version is a little bit cleaned up. There was a code path not necessary. A binding is now an IDisposable
 that can be used to unbind.
 
+# Improvements
+
+It is now allowed to use a method call on the right side of the binding. See the test
+
 ```c#
-    public class Person : INotifyPropertyChanged
+using System;
+using System.ComponentModel;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+using Bind;
+
+namespace Bind.Test
+{
+    public class BaseModel : INotifyPropertyChanged
+    {
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        public void SetPropertyChanged(string propName)
+        {
+            if (PropertyChanged != null)
+                PropertyChanged.Invoke(this, new PropertyChangedEventArgs(propName));
+        }
+    }
+    public class Person : BaseModel
     {
         public int Age { get; set; }
         public string Name { get; set; }
@@ -18,13 +40,48 @@ that can be used to unbind.
             Age = 42;
             Name = "Mustermann";
         }
+    }
 
-        public event PropertyChangedEventHandler PropertyChanged;
-
-        public void SetPropertyChanged(string propName)
+    public class Foo : BaseModel
+    {
+        int a;
+        public int A
         {
-            if (PropertyChanged != null)
-                PropertyChanged.Invoke(this, new PropertyChangedEventArgs(propName));
+            get { return a; }
+            set
+            {
+                if (a == value)
+                    return;
+                a = value;
+                SetPropertyChanged("A");
+            }
+        }
+
+
+        int b;
+        public int B
+        {
+            get { return b; }
+            set
+            {
+                if (b == value)
+                    return;
+                b = value;
+                SetPropertyChanged("B");
+            }
+        }
+    }
+
+    public class Bar
+    {
+        public int C { get; set; }
+    }
+
+    public class Adder
+    {
+        public static int Add(int a, int b)
+        {
+            return a + b;
         }
     }
 
@@ -43,7 +100,7 @@ that can be used to unbind.
             var person1 = new Person();
             var person2 = new Person();
 
-            var binding = NBind.Bind(() => person1.Age == person2.Age && person1.Name == person2.Name);
+            var binding = NBind.Create(() => person1.Age == person2.Age && person1.Name == person2.Name);
 
             person2.Age = 43;
             person2.SetPropertyChanged("Age");
@@ -64,15 +121,30 @@ that can be used to unbind.
             var person1 = new Person();
             var person2 = new Person();
 
-            var binding = NBind.Bind(() => person1.Age == person2.Age && person1.Name == person2.Name + " Hello World");
+            var binding = NBind.Create(() => person1.Age == person2.Age && person1.Name == person2.Name + " Hello World");
 
             person2.Age = 43;
             person2.SetPropertyChanged("Age");
             person2.Name = "NewName";
             person2.SetPropertyChanged("Name");
             Assert.AreEqual(person1.Name, person2.Name + " Hello World");
+        }
 
+        [TestMethod]
+        public void NBind_ComplexBindingTest2()
+        {
+            var foo = new Foo() { A = 0, B = 0 };
+            var bar = new Bar();
 
+            var binding = NBind.Create(() => bar.C == Adder.Add(foo.A, foo.B));
+
+            foo.A = 42;
+            Assert.AreEqual(42, bar.C);
+            foo.B = 42;
+            Assert.AreEqual(84, bar.C);
         }
     }
+}
+
+
 ```
