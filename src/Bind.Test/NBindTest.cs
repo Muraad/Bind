@@ -37,14 +37,11 @@ namespace Bind.Test
         public int A
         {
             get { return a; }
-
             set
             {
                 if (a == value)
                     return;
-
                 a = value;
-
                 SetPropertyChanged("A");
             }
         }
@@ -54,15 +51,11 @@ namespace Bind.Test
         public int B
         {
             get { return b; }
-
-
             set
             {
                 if (b == value)
                     return;
-
                 b = value;
-
                 SetPropertyChanged("B");
             }
         }
