@@ -9,7 +9,7 @@ that can be used to unbind.
 It is now allowed to use a method call on the right side of the binding. See the test
 
 ```c#
-    using System;
+using System;
 using System.ComponentModel;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -48,14 +48,11 @@ namespace Bind.Test
         public int A
         {
             get { return a; }
-
             set
             {
                 if (a == value)
                     return;
-
                 a = value;
-
                 SetPropertyChanged("A");
             }
         }
@@ -65,15 +62,11 @@ namespace Bind.Test
         public int B
         {
             get { return b; }
-
-
             set
             {
                 if (b == value)
                     return;
-
                 b = value;
-
                 SetPropertyChanged("B");
             }
         }
@@ -152,5 +145,6 @@ namespace Bind.Test
         }
     }
 }
+
 
 ```
